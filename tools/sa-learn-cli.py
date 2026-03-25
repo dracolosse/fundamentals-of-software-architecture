@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 import click
 from datetime import datetime
 
-PARENT_PAGE_ID = "32e85a16-ea1f-80a2-8180-c55b3fa04794"
+PARENT_PAGE_ID = "32e85a16-ea1f-8007-8d74-f68aeadcfaf6"
 
 
 def api():

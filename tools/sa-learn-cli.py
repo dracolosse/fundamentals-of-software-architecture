@@ -292,6 +292,17 @@ def progress():
     click.echo()
 
 
+# ─── Dashboard (Notion page) ───
+
+@cli.command()
+def dashboard():
+    """Rebuild the Notion dashboard page with live stats."""
+    click.echo("Building Notion dashboard...")
+    count = api().build_notion_dashboard(PARENT_PAGE_ID)
+    click.echo(f"Dashboard updated with {count} blocks.")
+    click.echo("Open Notion to see your visual dashboard!")
+
+
 # ─── Entry Point ───
 
 if __name__ == "__main__":

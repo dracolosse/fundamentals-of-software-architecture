@@ -534,3 +534,279 @@ def seed_all_exams():
     add_exam(1, "Foundations", "I")
     add_exam(2, "Styles", "II")
     add_exam(3, "Final", "III")
+
+
+# ─── Notion Dashboard Builder ───
+
+def _text(content, bold=False, color="default", code=False):
+    """Helper: create a rich_text element."""
+    rt = {"type": "text", "text": {"content": content}}
+    annotations = {}
+    if bold:
+        annotations["bold"] = True
+    if color != "default":
+        annotations["color"] = color
+    if code:
+        annotations["code"] = True
+    if annotations:
+        rt["annotations"] = annotations
+    return rt
+
+
+def _paragraph(texts, color="default"):
+    """Helper: create a paragraph block."""
+    rich = texts if isinstance(texts, list) else [_text(texts)]
+    block = {"object": "block", "type": "paragraph",
+             "paragraph": {"rich_text": rich}}
+    if color != "default":
+        block["paragraph"]["color"] = color
+    return block
+
+
+def _heading(level, text, color="default"):
+    """Helper: create a heading block (1, 2, or 3)."""
+    key = f"heading_{level}"
+    block = {"object": "block", "type": key,
+             key: {"rich_text": [_text(text)], "is_toggleable": False}}
+    if color != "default":
+        block[key]["color"] = color
+    return block
+
+
+def _callout(texts, icon="📊", color="default"):
+    """Helper: create a callout block."""
+    rich = texts if isinstance(texts, list) else [_text(texts)]
+    block = {"object": "block", "type": "callout",
+             "callout": {"rich_text": rich,
+                         "icon": {"type": "emoji", "emoji": icon}}}
+    if color != "default":
+        block["callout"]["color"] = color
+    return block
+
+
+def _divider():
+    return {"object": "block", "type": "divider", "divider": {}}
+
+
+def _progress_bar(done, total, width=20):
+    """Generate a text-based progress bar."""
+    filled = int(width * done / total) if total > 0 else 0
+    bar = "▓" * filled + "░" * (width - filled)
+    pct = int(done / total * 100) if total > 0 else 0
+    return f"{bar}  {done}/{total} ({pct}%)"
+
+
+def _table_row(cells):
+    """Helper: create a table_row block."""
+    return {
+        "object": "block",
+        "type": "table_row",
+        "table_row": {
+            "cells": [[_text(c)] for c in cells]
+        },
+    }
+
+
+def _table(headers, rows, col_width=None):
+    """Helper: create a table block with header + data rows."""
+    children = [_table_row(headers)]
+    for row in rows:
+        children.append(_table_row(row))
+    return {
+        "object": "block",
+        "type": "table",
+        "table": {
+            "table_width": len(headers),
+            "has_column_header": True,
+            "has_row_header": False,
+            "children": children,
+        },
+    }
+
+
+def build_notion_dashboard(page_id):
+    """Build a visual dashboard on the Notion home page.
+    Clears non-database blocks and rebuilds with live stats."""
+    client = get_client()
+    stats = get_progress_stats()
+    chapters = list_chapters()
+
+    # Remove existing non-database blocks (keep databases)
+    existing = client.blocks.children.list(block_id=page_id)["results"]
+    for block in existing:
+        if block["type"] != "child_database":
+            try:
+                client.blocks.delete(block_id=block["id"])
+            except Exception:
+                pass
+
+    # Collect all dashboard blocks to prepend before databases
+    blocks = []
+
+    # ── Header ──
+    blocks.append(_callout(
+        [_text("Fundamentals of Software Architecture", bold=True),
+         _text(" — 30-Week Learning Program\n", bold=False),
+         _text("Richards & Ford, 2nd Edition (2025)")],
+        icon="🏛️", color="blue_background"
+    ))
+    blocks.append(_paragraph(""))
+
+    # ── Overall Progress ──
+    blocks.append(_heading(2, "📈 Overall Progress"))
+    cc = stats["completed_chapters"]
+    tc = stats["total_chapters"]
+    in_progress = sum(
+        1 for ch in chapters
+        if ch["properties"]["Status"]["select"]
+        and ch["properties"]["Status"]["select"]["name"] == "In Progress"
+    )
+    blocks.append(_callout(
+        [_text(f"Chapters Completed: {cc}/{tc}\n", bold=True),
+         _text(_progress_bar(cc, tc, 25)),
+         _text(f"\nIn Progress: {in_progress}  |  ", bold=False),
+         _text(f"Remaining: {tc - cc - in_progress}")],
+        icon="📊", color="green_background"
+    ))
+
+    # Part breakdown
+    bp = stats["by_part"]
+    part_rows = []
+    part_labels = {"I": "Foundations (Ch 1-8)", "II": "Architecture Styles (Ch 9-19)",
+                   "III": "Techniques & Soft Skills (Ch 20-27)"}
+    for pk in ["I", "II", "III"]:
+        p = bp[pk]
+        status_str = "Complete ✅" if p["done"] == p["total"] and p["total"] > 0 else (
+            "In Progress 🔄" if p["done"] > 0 else "Not Started ⬜")
+        part_rows.append([f"Part {pk}", part_labels[pk],
+                          _progress_bar(p["done"], p["total"], 15), status_str])
+    blocks.append(_table(["Part", "Topics", "Progress", "Status"], part_rows))
+    blocks.append(_paragraph(""))
+
+    # ── Scores & GPA ──
+    blocks.append(_heading(2, "🎯 Scores & GPA"))
+    gpa_display = f"{stats['gpa_grade']} ({stats['gpa']:.1f})" if stats["gpa"] > 0 else "—"
+    theory_display = f"{stats['theory_avg']:.1f}" if stats["theory_avg"] > 0 else "—"
+    exercise_display = f"{stats['exercise_avg']:.1f}" if stats["exercise_avg"] > 0 else "—"
+
+    blocks.append(_table(
+        ["Metric", "Score", "Weight"],
+        [
+            ["Theory Average", theory_display, "—"],
+            ["Exercise Average", exercise_display, "40%"],
+            ["Exam Average", f"{sum(s for e in stats['exams'] if (s := e['score']) is not None) / max(len([e for e in stats['exams'] if e['score'] is not None]), 1):.0f}/200" if any(e["score"] is not None for e in stats["exams"]) else "—", "40%"],
+            ["Journal & Katas", f"{stats['journal_count']} entries, {stats['kata_count']} katas", "20%"],
+            ["GPA", gpa_display, "100%"],
+        ]
+    ))
+    blocks.append(_paragraph(""))
+
+    # ── Exams ──
+    blocks.append(_heading(2, "📝 Exams"))
+    exam_rows = []
+    for e in stats["exams"]:
+        if e["score"] is not None:
+            status = "✅ PASS" if e["pass"] else "❌ FAIL"
+            exam_rows.append([e["name"], f"{e['score']}/200", e["grade"], status])
+        else:
+            exam_rows.append([e["name"], "—", "—", "⬜ Pending"])
+    blocks.append(_table(["Exam", "Score", "Grade", "Status"], exam_rows))
+    blocks.append(_paragraph(""))
+
+    # ── Activities ──
+    blocks.append(_heading(2, "🔧 Activities"))
+    kata_display = f"{stats['kata_count']} completed (avg: {stats['kata_avg']:.1f})" if stats["kata_count"] > 0 else "0 completed"
+    jw = stats["journal_weeks"]
+    jc = stats["journal_count"]
+    journal_display = f"{jc}/{jw} weeks ({int(jc/jw*100)}%)" if jw > 0 else "0 entries"
+    review_display = f"{stats['due_reviews']} concepts due" if stats["due_reviews"] > 0 else "All caught up ✅"
+
+    blocks.append(_table(
+        ["Activity", "Status"],
+        [
+            ["🥋 Architecture Katas", kata_display],
+            ["📓 Journal Entries", journal_display],
+            ["🧠 Spaced Repetition", review_display],
+        ]
+    ))
+    blocks.append(_paragraph(""))
+
+    # ── Chapter Status ──
+    blocks.append(_heading(2, "📚 Chapter Status"))
+    chapter_rows = []
+    for ch in chapters:
+        p = ch["properties"]
+        num = p["Number"]["number"] or 0
+        name = p["Name"]["title"][0]["plain_text"] if p["Name"]["title"] else "?"
+        status = p["Status"]["select"]["name"] if p["Status"]["select"] else "?"
+        part = p["Part"]["select"]["name"] if p["Part"]["select"] else "?"
+        ts = p["Theory Score"]["number"]
+        es = p["Exercise Score"]["number"]
+        icon = {"Not Started": "⬜", "In Progress": "🔄", "Complete": "✅"}.get(status, "?")
+        chapter_rows.append([
+            f"{icon} {name}",
+            f"Part {part}",
+            str(ts) if ts is not None else "—",
+            str(es) if es is not None else "—",
+        ])
+    blocks.append(_table(["Chapter", "Part", "Theory", "Exercise"], chapter_rows))
+    blocks.append(_paragraph(""))
+
+    # ── Timeline ──
+    blocks.append(_heading(2, "🗓️ Timeline"))
+    blocks.append(_table(
+        ["Phase", "Weeks", "Content"],
+        [
+            ["Part I", "Week 1-8", "Foundations: Thinking, Modularity, Characteristics, Components"],
+            ["Exam 1", "Week 9", "Foundations Exam (200 pts)"],
+            ["Part II", "Week 10-20", "Styles: Layered, Monolith, Pipeline, Microkernel, Service, Event, Space, SOA, Microservices"],
+            ["Exam 2", "Week 21", "Architecture Styles Exam (200 pts)"],
+            ["Part III", "Week 22-29", "Techniques: Patterns, ADRs, Risk, Diagrams, Teams, Leadership"],
+            ["Exam 3", "Week 30", "Final Exam (200 pts)"],
+        ]
+    ))
+
+    # ── Grading Scale ──
+    blocks.append(_paragraph(""))
+    blocks.append(_heading(3, "📐 Grading Scale"))
+    blocks.append(_table(
+        ["Grade", "Score", "Description"],
+        [
+            ["A", "90-100", "Excellent — SA-cert ready"],
+            ["B", "80-89", "Good — solid understanding"],
+            ["C", "70-79", "Adequate — needs reinforcement"],
+            ["D", "60-69", "Below expectations"],
+            ["F", "<60", "Fail — must redo"],
+        ]
+    ))
+
+    # ── Footer ──
+    blocks.append(_divider())
+    blocks.append(_callout(
+        [_text("Update this dashboard: ", bold=True),
+         _text("sa-learn dashboard", code=True),
+         _text("  |  Track progress: "),
+         _text("sa-learn progress", code=True)],
+        icon="💡", color="gray_background"
+    ))
+
+    # Prepend all blocks before the databases
+    # Notion API appends — we need to add blocks at the top
+    # Strategy: get database block IDs, delete them, add dashboard, re-add won't work
+    # Instead: just append after existing content — databases are already there
+    # We'll append blocks AFTER deleting non-db blocks (already done above)
+    # But databases come after too — we need blocks BEFORE databases
+    # Notion doesn't support "prepend" — only append.
+    # Workaround: delete databases, append dashboard blocks, recreate databases
+    # Better: just append dashboard blocks after databases (acceptable layout)
+
+    # Actually let's use the "after" parameter to insert blocks before databases
+    # The Notion API blocks.children.append doesn't support positioning.
+    # Simplest: append all blocks (they go after databases — acceptable)
+
+    # Batch append (Notion limits to 100 blocks per request)
+    for i in range(0, len(blocks), 100):
+        batch = blocks[i:i+100]
+        client.blocks.children.append(block_id=page_id, children=batch)
+
+    return len(blocks)
